@@ -40,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="re-fetch every manifest and access level instead of reusing cached copies")
     parser.add_argument("--cache-only", action="store_true",
                         help="make no requests: map only the manifests already cached, skip the rest")
+    parser.add_argument("--outage-pause", type=float, default=15, metavar="MINUTES",
+                        help="when IISG's server looks down, wait this long before trying it again (default: 15)")
+    parser.add_argument("--max-outage", type=float, default=30, metavar="MINUTES",
+                        help="once it has been down this long, stop requesting and finish the run "
+                             "from the cache (default: 30)")
     parser.add_argument("--workers", type=int, default=4,
                         help="concurrent manifest requests (default: 4)")
     parser.add_argument("--limit", type=int, help="stop after this many manifests (for a quick test run)")
@@ -58,7 +63,8 @@ def main(argv: list[str] | None = None) -> int:
 
     links = list(islice(iter_manifest_links(sources), args.limit))
 
-    fetcher = ManifestFetcher(args.cache_dir, refresh=args.refresh, offline=args.cache_only)
+    fetcher = ManifestFetcher(args.cache_dir, refresh=args.refresh, offline=args.cache_only,
+                              outage_pause=args.outage_pause * 60, max_outage=args.max_outage * 60)
     if args.cache_only:
         cached = [link for link in links if fetcher.cache_path(link.manifest_url).exists()]
         print(f"--cache-only: {len(cached)} of {len(links)} manifests cached, skipping the rest", file=sys.stderr)

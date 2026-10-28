@@ -46,6 +46,8 @@ pipeline's N-Triples output, which it scans for those viewer links. Output goes 
 | `--limit 20` | quick test run on the first 20 manifests |
 | `--workers 4` | concurrent manifest requests (default 4) |
 | `--cache-only` | make no requests: map only the manifests already cached (e.g. while IISG's manifest service is down) |
+| `--outage-pause 15` | minutes to stop requesting when IISG's server looks down (5 failed manifests in a row), before trying again |
+| `--max-outage 30` | minutes of outage after which the run stops requesting and finishes from the cache |
 | `--refresh` | re-fetch every manifest and access level instead of reusing the cache |
 | `--cache-dir` | where fetched manifests are kept (default `data/cache/manifests/`) |
 
@@ -57,7 +59,9 @@ fetched successfully is kept as gzipped JSON under `data/cache/manifests/`
 runs. So the first run takes an hour or two, and each nightly run
 after that only fetches manifests that are new since the last one. Failed
 fetches (404s, timeouts after retries) aren't cached, so they're retried
-the next run. Use `--refresh` when existing manifests have changed
+the next run. If IISG's server goes down mid-run, the run doesn't hang on
+timeouts: it pauses (`--outage-pause`), tries again, and after
+`--max-outage` finishes with what it has. Use `--refresh` when existing manifests have changed
 upstream.
 
 The output file is written to `<out>.tmp` and renamed when the run

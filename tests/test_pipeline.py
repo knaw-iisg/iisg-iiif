@@ -2,6 +2,8 @@ import gzip
 import json
 from pathlib import Path
 
+import requests
+
 from rdflib import RDF, XSD, Graph, Literal, URIRef
 
 from iisg_iiif import cli
@@ -161,6 +163,30 @@ def test_cli_cache_only_skips_uncached_without_a_request(tmp_path, monkeypatch):
     assert g.value(CANVAS, IISGV.accessLevel) is None
 
 
+def test_fetcher_goes_offline_when_the_service_stays_down(tmp_path):
+    session = _DownSession()
+    fetcher = ManifestFetcher(tmp_path, session=session, retries=2, backoff=0,
+                              outage_after=2, outage_pause=0, max_outage=0)
+    for i in range(2):
+        assert fetcher.get(f"{HANDLE}&n={i}") == (None, False)
+    assert fetcher.offline and session.calls == 4  # 2 URLs x 2 attempts
+    assert fetcher.get(f"{HANDLE}&n=2") == (None, False)
+    assert session.calls == 4  # offline: no further requests
+
+
+def test_fetcher_pauses_then_resumes_when_the_service_comes_back(tmp_path, monkeypatch):
+    slept = []
+    monkeypatch.setattr("iisg_iiif.fetch.time.sleep", slept.append)
+    session = _DownSession()
+    fetcher = ManifestFetcher(tmp_path, session=session, retries=1, backoff=0,
+                              outage_after=1, outage_pause=900, max_outage=3600)
+    assert fetcher.get(HANDLE) == (None, False)  # trips the breaker
+    session.down = False
+    fetcher.access_level(HANDLE, THUMB)  # waits out the pause, then succeeds
+    assert slept and slept[0] > 800
+    assert not fetcher.offline and fetcher._down_since is None
+
+
 class _NoNetwork:
     headers: dict
 
@@ -185,3 +211,16 @@ class _FakeSession(_NoNetwork):
 
     def request(self, method, url, **kwargs):
         return _FakeResponse(*self.responses[url])
+
+
+class _DownSession(_NoNetwork):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.down = True
+
+    def request(self, method, url, **kwargs):
+        self.calls += 1
+        if self.down:
+            raise requests.exceptions.ConnectionError("down")
+        return _FakeResponse(200, None)
