@@ -1,0 +1,8 @@
+.venv/
+venv/
+__pycache__/
+.DS_Store
+*.egg-info/
+.pytest_cache/
+# manifest cache + default output: regenerable, and ~100k files
+data/

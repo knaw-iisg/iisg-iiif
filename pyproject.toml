@@ -1,0 +1,19 @@
+[project]
+name = "iisg-iiif"
+version = "0.1.0"
+description = "IISG IIIF Presentation manifests -> schema.org RDF, linked to the findingaid-etl records they illustrate"
+requires-python = ">=3.10"
+dependencies = [
+    "rdflib>=7.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["iisg_iiif*"]
