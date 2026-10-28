@@ -16,7 +16,9 @@ looks the same either way, so the level is read from where its thumbnail
 redirects to: one HEAD request per manifest, not per canvas.
 
 Failures aren't cached, so a manifest that 404s or times out tonight is
-simply tried again tomorrow.
+simply tried again tomorrow. With ``offline`` (``--cache-only``) nothing is
+requested at all: only what's already cached is returned, e.g. to publish
+a partial harvest while IISG's manifest service is down.
 """
 from __future__ import annotations
 
@@ -39,9 +41,10 @@ _LEVEL_REDIRECT = re.compile(r"/iiif/image/[^/]+__([a-z0-9-]+)/")
 
 class ManifestFetcher:
     def __init__(self, cache_dir: Path, refresh: bool = False, retries: int = 4, backoff: float = 5,
-                 max_backoff: float = 60, session: requests.Session | None = None):
+                 max_backoff: float = 60, session: requests.Session | None = None, offline: bool = False):
         self.cache_dir = cache_dir
         self.refresh = refresh
+        self.offline = offline
         self.retries = retries
         self.backoff = backoff
         self.max_backoff = max_backoff
@@ -59,6 +62,8 @@ class ManifestFetcher:
         if not self.refresh and path.exists():
             with gzip.open(path, "rt", encoding="utf-8") as f:
                 return json.load(f), True
+        if self.offline:
+            return None, False
         manifest = self._download(url)
         if manifest is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,6 +83,8 @@ class ManifestFetcher:
         path = self.cache_path(url, ".access")
         if not self.refresh and path.exists():
             return path.read_text().strip()
+        if self.offline:
+            return None
         r = self._request("HEAD", thumbnail, allow_redirects=False)
         if r is None:
             return None

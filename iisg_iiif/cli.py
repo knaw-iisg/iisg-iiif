@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"where fetched manifests are kept (default: {DEFAULT_CACHE_DIR.relative_to(THIS_REPO)})")
     parser.add_argument("--refresh", action="store_true",
                         help="re-fetch every manifest and access level instead of reusing cached copies")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="make no requests: map only the manifests already cached, skip the rest")
     parser.add_argument("--workers", type=int, default=4,
                         help="concurrent manifest requests (default: 4)")
     parser.add_argument("--limit", type=int, help="stop after this many manifests (for a quick test run)")
@@ -51,9 +53,16 @@ def main(argv: list[str] | None = None) -> int:
     if not sources:
         parser.error("none of the --links-from files exist")
 
+    if args.cache_only and args.refresh:
+        parser.error("--cache-only and --refresh exclude each other")
+
     links = list(islice(iter_manifest_links(sources), args.limit))
 
-    fetcher = ManifestFetcher(args.cache_dir, refresh=args.refresh)
+    fetcher = ManifestFetcher(args.cache_dir, refresh=args.refresh, offline=args.cache_only)
+    if args.cache_only:
+        cached = [link for link in links if fetcher.cache_path(link.manifest_url).exists()]
+        print(f"--cache-only: {len(cached)} of {len(links)} manifests cached, skipping the rest", file=sys.stderr)
+        links = cached
     stats = {"manifests": 0, "fetched": 0, "cached": 0, "failed": 0, "unsupported": 0, "canvases": 0, "triples": 0}
     access_levels: Counter[str] = Counter()
 

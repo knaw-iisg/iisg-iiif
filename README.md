@@ -45,6 +45,7 @@ pipeline's N-Triples output, which it scans for those viewer links. Output goes 
 |---|---|
 | `--limit 20` | quick test run on the first 20 manifests |
 | `--workers 4` | concurrent manifest requests (default 4) |
+| `--cache-only` | make no requests: map only the manifests already cached (e.g. while IISG's manifest service is down) |
 | `--refresh` | re-fetch every manifest and access level instead of reusing the cache |
 | `--cache-dir` | where fetched manifests are kept (default `data/cache/manifests/`) |
 

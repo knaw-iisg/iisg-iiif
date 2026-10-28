@@ -142,6 +142,25 @@ def test_cli_end_to_end_from_cache(tmp_path, monkeypatch):
     assert not out.with_name("iiif.nt.tmp").exists()
 
 
+def test_cli_cache_only_skips_uncached_without_a_request(tmp_path, monkeypatch):
+    nt = tmp_path / "findingaid.nt"
+    other = "https://hdl.handle.net/10622/COLL00357.3?locatt=view:manifest"
+    nt.write_text(FINDINGAID_NT + f"<{RECORD}3> <https://schema.org/contentUrl> "
+                  f"<https://access.iisg.amsterdam/universalviewer/#?manifest={other}> .\n")
+    cache = tmp_path / "cache"
+    seed = ManifestFetcher(cache).cache_path(HANDLE)
+    seed.parent.mkdir(parents=True)
+    with gzip.open(seed, "wt", encoding="utf-8") as f:
+        json.dump(load_fixture(), f)  # no .access file: must not be looked up either
+    monkeypatch.setattr("iisg_iiif.fetch.requests.Session", _NoNetwork)
+
+    out = tmp_path / "iiif.nt"
+    assert cli.main(["--links-from", str(nt), "--cache-dir", str(cache), "--out", str(out), "--cache-only"]) == 0
+    g = Graph().parse(out, format="nt")
+    assert (RECORD, SDO.image, CANVAS) in g
+    assert g.value(CANVAS, IISGV.accessLevel) is None
+
+
 class _NoNetwork:
     headers: dict
 
