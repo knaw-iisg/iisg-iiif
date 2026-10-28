@@ -2,15 +2,17 @@
 
 Harvests IISG's [IIIF Presentation 3](https://iiif.io/api/presentation/3.0/)
 manifests and publishes them as schema.org RDF, attached to the
-[findingaid-etl](https://github.com/knaw-iisg/findingaid-etl) records they
+[findingaid-etl](https://github.com/knaw-iisg/findingaid-etl) and
+[biblio-etl](https://github.com/knaw-iisg/biblio-etl) records they
 illustrate: per record, its manifest, a thumbnail, and every canvas as an
-`sdo:ImageObject` with its full-size image, dimensions and IIIF Image API
-base.
+`sdo:ImageObject` with its full-size image, pixel dimensions, IIIF Image
+API base and access level.
 
-findingaid-etl already emits each component's manifest, but only as a
-Universal Viewer link (`sdo:contentUrl <https://access.iisg.amsterdam/universalviewer/#?manifest=...>`).
-Nothing dereferences it, so the images themselves aren't in the knowledge
-graph. This pipeline fills that in.
+Both pipelines already emit each record's manifest, but only as a Universal
+Viewer link (`sdo:contentUrl <https://access.iisg.amsterdam/universalviewer/#?manifest=...>`;
+findingaid-etl from EAD `<daoloc>`, biblio-etl from MARC 856). Nothing
+dereferences it, so the images themselves aren't in the knowledge graph.
+This pipeline fills that in.
 
 ## Public instance
 
@@ -30,26 +32,28 @@ python -m venv .venv && .venv/bin/pip install -e '.[test]'
 ## Usage
 
 ```bash
-.venv/bin/python -m iisg_iiif.cli --links-from ../iisg-kg-etl/output/findingaid.nt
+.venv/bin/python -m iisg_iiif.cli \
+    --links-from ../iisg-kg-etl/output/findingaid.nt \
+    --links-from ../iisg-kg-etl/output/biblio.nt
 ```
 
-It doesn't harvest EAD itself: `--links-from` is findingaid-etl's
-N-Triples output, which it scans for those viewer links (repeatable, for
-more than one source file). Output goes to `data/iiif.nt` unless you pass
+It doesn't harvest EAD or MARC itself: each `--links-from` is another
+pipeline's N-Triples output, which it scans for those viewer links. Output goes to `data/iiif.nt` unless you pass
 `--out`.
 
 | Flag | Does |
 |---|---|
 | `--limit 20` | quick test run on the first 20 manifests |
 | `--workers 4` | concurrent manifest requests (default 4) |
-| `--refresh` | re-fetch every manifest instead of reusing the cache |
+| `--refresh` | re-fetch every manifest and access level instead of reusing the cache |
 | `--cache-dir` | where fetched manifests are kept (default `data/cache/manifests/`) |
 
 ### Caching
 
-There are ~112k manifests. Every one that's fetched successfully is kept
-as gzipped JSON under `data/cache/manifests/` (gitignored), and reused on
-later runs. So the first run takes an hour or two, and each nightly run
+There are ~112k manifests from the finding aids alone. Every one that's
+fetched successfully is kept as gzipped JSON under `data/cache/manifests/`
+(gitignored), together with its access level (below), and reused on later
+runs. So the first run takes an hour or two, and each nightly run
 after that only fetches manifests that are new since the last one. Failed
 fetches (404s, timeouts after retries) aren't cached, so they're retried
 the next run. Use `--refresh` when existing manifests have changed
@@ -79,10 +83,32 @@ finishes, so an interrupted run never leaves a half-written graph behind.
     sdo:contentUrl <https://access.iisg.amsterdam/iiif/image/1E64C910-BE3D-11E7-A170-7600EFCD2CB1/full/full/0/default.jpg> ;
     sdo:thumbnailUrl <https://access.iisg.amsterdam/iiif/image/1E64C910-BE3D-11E7-A170-7600EFCD2CB1/full/200,/0/default.jpg> ;
     sdo:encodingFormat "image/jpeg" ;
-    sdo:width 3546 ;
-    sdo:height 2415 ;
-    iisgv:iiifImageService <https://access.iisg.amsterdam/iiif/image/1E64C910-BE3D-11E7-A170-7600EFCD2CB1> .
+    sdo:width  [ a sdo:QuantitativeValue ; sdo:value 3546 ; sdo:unitCode "E37" ] ;   # E37 = pixel
+    sdo:height [ a sdo:QuantitativeValue ; sdo:value 2415 ; sdo:unitCode "E37" ] ;
+    iisgv:iiifImageService <https://access.iisg.amsterdam/iiif/image/1E64C910-BE3D-11E7-A170-7600EFCD2CB1> ;
+    iisgv:accessLevel accessLevel:open .
 ```
+
+### Sizes and access
+
+An item like a poster has three sizes, and each one belongs to a different
+resource:
+
+| Size | Of | Where |
+|---|---|---|
+| physical, e.g. 78 × 53 cm | the item itself | biblio-etl, from MARC 300 (`iisgv:size`) |
+| pixels, e.g. 6637 × 9423 | the master scan (the canvas) | here, `sdo:width`/`sdo:height` with unit `E37` |
+| how large the public may view it | not a size: an access rule | here, `iisgv:accessLevel` |
+
+IISG's image server caps the public copy of some images, and only shows
+it by redirecting each image to a `{id}__{level}` variant: for example
+`…__pictoright` (at most 450 px) or `…__restricted` (at most 1500 px). The
+manifest looks the same either way. So the level is read from where the
+manifest's thumbnail redirects to: `accessLevel:open` if it doesn't
+redirect, otherwise `accessLevel:{level}`, plus a human-readable
+`sdo:conditionsOfAccess` for the levels it knows. That's one HEAD request
+per manifest, cached. biblio-etl writes the same `accessLevel:` IRIs on the
+catalogue item, from MARC 542 $m.
 
 Sound and video canvases get `sdo:AudioObject`/`sdo:VideoObject` (plus
 `sdo:duration`) and hang off the record via `sdo:associatedMedia` rather

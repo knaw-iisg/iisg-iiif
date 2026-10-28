@@ -8,6 +8,13 @@ reused as-is, so a nightly run only fetches manifests that are new since
 the last one. ``--refresh`` re-fetches everything (e.g. after IISG changes
 its manifest service).
 
+Each manifest's access level is cached the same way, next to it. IISG's
+image server caps what the public can download for some images, and says
+so only by redirecting the image to a ``{id}__{level}`` variant (e.g.
+``N30051001508412__pictoright``, at most 450 px). The manifest itself
+looks the same either way, so the level is read from where its thumbnail
+redirects to: one HEAD request per manifest, not per canvas.
+
 Failures aren't cached, so a manifest that 404s or times out tonight is
 simply tried again tomorrow.
 """
@@ -16,6 +23,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -23,6 +31,10 @@ from pathlib import Path
 import requests
 
 USER_AGENT = "iisg-iiif/0.1 (+https://github.com/knaw-iisg/iisg-iiif)"
+
+# What an un-capped image is recorded as.
+OPEN = "open"
+_LEVEL_REDIRECT = re.compile(r"/iiif/image/[^/]+__([a-z0-9-]+)/")
 
 
 class ManifestFetcher:
@@ -37,9 +49,9 @@ class ManifestFetcher:
         self.session.headers.setdefault("User-Agent", USER_AGENT)
         self.session.headers.setdefault("Accept", "application/ld+json, application/json")
 
-    def cache_path(self, url: str) -> Path:
+    def cache_path(self, url: str, suffix: str = ".json.gz") -> Path:
         digest = hashlib.sha1(url.encode("utf-8")).hexdigest()
-        return self.cache_dir / digest[:2] / f"{digest}.json.gz"
+        return self.cache_dir / digest[:2] / f"{digest}{suffix}"
 
     def get(self, url: str) -> tuple[dict | None, bool]:
         """Return ``(manifest, from_cache)``; ``manifest`` is None if it couldn't be fetched."""
@@ -56,25 +68,58 @@ class ManifestFetcher:
             tmp.replace(path)
         return manifest, False
 
+    def access_level(self, url: str, thumbnail: str | None) -> str | None:
+        """The access level of manifest ``url``'s images, judged by where its
+        ``thumbnail`` redirects: ``"open"`` if it doesn't, else the
+        ``__{level}`` suffix (``"pictoright"``, ``"restricted"``, ...).
+        None if it couldn't be determined."""
+        if not thumbnail:
+            return None
+        path = self.cache_path(url, ".access")
+        if not self.refresh and path.exists():
+            return path.read_text().strip()
+        r = self._request("HEAD", thumbnail, allow_redirects=False)
+        if r is None:
+            return None
+        if r.status_code == 200:
+            level = OPEN
+        else:
+            m = _LEVEL_REDIRECT.search(r.headers.get("location", ""))
+            if not (r.is_redirect and m):
+                print(f"  can't tell access level: {thumbnail} -> {r.status_code} "
+                      f"{r.headers.get('location', '')}", file=sys.stderr)
+                return None
+            level = m.group(1)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(level)
+        return level
+
     def _download(self, url: str) -> dict | None:
+        r = self._request("GET", url)
+        if r is None:
+            return None
+        if r.status_code != 200:
+            print(f"  {r.status_code}: {url}", file=sys.stderr)
+            return None
+        try:
+            return r.json()
+        except ValueError:
+            print(f"  not JSON: {url} ({r.headers.get('content-type')})", file=sys.stderr)
+            return None
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response | None:
         """Retry transient failures (connection errors, 429, 5xx) with
         exponential backoff, same policy as dataverse-etl's http_get_json;
-        give up immediately on anything else (a 404 won't fix itself)."""
+        return any other response as-is (a 404 won't fix itself). None if
+        the retries ran out."""
         for attempt in range(self.retries):
             try:
-                r = self.session.get(url, timeout=60)
+                r = self.session.request(method, url, timeout=60, **kwargs)
             except requests.exceptions.RequestException as e:
                 reason = repr(e)
             else:
-                if r.status_code == 200:
-                    try:
-                        return r.json()
-                    except ValueError:
-                        print(f"  not JSON: {url} ({r.headers.get('content-type')})", file=sys.stderr)
-                        return None
                 if r.status_code != 429 and r.status_code < 500:
-                    print(f"  {r.status_code}: {url}", file=sys.stderr)
-                    return None
+                    return r
                 reason = str(r.status_code)
             if attempt < self.retries - 1:
                 wait = min(self.backoff * (2 ** attempt), self.max_backoff)

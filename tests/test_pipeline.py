@@ -8,7 +8,7 @@ from iisg_iiif import cli
 from iisg_iiif.fetch import ManifestFetcher
 from iisg_iiif.links import ManifestLink, iter_manifest_links
 from iisg_iiif.mapper import is_presentation_3, map_manifest
-from iisg_iiif.prefixes import IISGV, SDO
+from iisg_iiif.prefixes import ACCESS_LEVEL, IISGV, SDO
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RECORD = URIRef("https://iisg.amsterdam/id/collection/COLL00357#2")
@@ -56,10 +56,33 @@ def test_map_manifest():
     assert (CANVAS, SDO.position, Literal(1)) in g
     assert (CANVAS, SDO.contentUrl,
             URIRef(f"https://access.iisg.amsterdam/iiif/image/{IMAGE_ID}/full/full/0/default.jpg")) in g
-    assert (CANVAS, SDO.width, Literal(3546, datatype=XSD.integer)) in g
-    assert (CANVAS, SDO.height, Literal(2415, datatype=XSD.integer)) in g
+    for prop, pixels in ((SDO.width, 3546), (SDO.height, 2415)):
+        size = g.value(CANVAS, prop)
+        assert (size, RDF.type, SDO.QuantitativeValue) in g
+        assert (size, SDO.value, Literal(pixels, datatype=XSD.integer)) in g
+        assert (size, SDO.unitCode, Literal("E37")) in g
     assert (CANVAS, SDO.encodingFormat, Literal("image/jpeg")) in g
     assert (CANVAS, IISGV.iiifImageService, URIRef(f"https://access.iisg.amsterdam/iiif/image/{IMAGE_ID}")) in g
+    assert g.value(CANVAS, IISGV.accessLevel) is None  # not given, so not asserted
+
+
+def test_pixel_size_nodes_are_stable_across_runs():
+    a, b = Graph(), Graph()
+    map_manifest(a, RECORD, load_fixture())
+    map_manifest(b, RECORD, load_fixture())
+    assert a.value(CANVAS, SDO.width) == b.value(CANVAS, SDO.width)
+
+
+def test_access_level_on_canvases():
+    g = Graph()
+    map_manifest(g, RECORD, load_fixture(), access_level="pictoright")
+    assert (CANVAS, IISGV.accessLevel, ACCESS_LEVEL.pictoright) in g
+    assert "Pictoright" in g.value(CANVAS, SDO.conditionsOfAccess)
+
+    g = Graph()
+    map_manifest(g, RECORD, load_fixture(), access_level="open")
+    assert (CANVAS, IISGV.accessLevel, ACCESS_LEVEL.open) in g
+    assert g.value(CANVAS, SDO.conditionsOfAccess) is None
 
 
 def test_presentation_2_is_not_mapped():
@@ -77,6 +100,29 @@ def test_fetcher_serves_cached_manifest_without_a_request(tmp_path):
     assert from_cache and manifest["id"] == str(MANIFEST)
 
 
+THUMB = "https://access.iisg.amsterdam/iiif/image/N30051001508412/full/200,/0/default.jpg"
+
+
+def test_access_level_from_thumbnail_redirect(tmp_path):
+    session = _FakeSession({THUMB: (302, "/iiif/image/N30051001508412__pictoright/full/200,/0/default.jpg")})
+    fetcher = ManifestFetcher(tmp_path, session=session)
+    assert fetcher.access_level(HANDLE, THUMB) == "pictoright"
+    # cached: a second call makes no request
+    fetcher.session = _NoNetwork()
+    assert fetcher.access_level(HANDLE, THUMB) == "pictoright"
+
+
+def test_access_level_open_when_not_redirected(tmp_path):
+    fetcher = ManifestFetcher(tmp_path, session=_FakeSession({THUMB: (200, None)}))
+    assert fetcher.access_level(HANDLE, THUMB) == "open"
+
+
+def test_access_level_unknown_is_not_cached(tmp_path):
+    fetcher = ManifestFetcher(tmp_path, session=_FakeSession({THUMB: (404, None)}))
+    assert fetcher.access_level(HANDLE, THUMB) is None
+    assert not fetcher.cache_path(HANDLE, ".access").exists()
+
+
 def test_cli_end_to_end_from_cache(tmp_path, monkeypatch):
     nt = tmp_path / "findingaid.nt"
     nt.write_text(FINDINGAID_NT)
@@ -85,12 +131,14 @@ def test_cli_end_to_end_from_cache(tmp_path, monkeypatch):
     seed.parent.mkdir(parents=True)
     with gzip.open(seed, "wt", encoding="utf-8") as f:
         json.dump(load_fixture(), f)
+    ManifestFetcher(cache).cache_path(HANDLE, ".access").write_text("restricted")
     monkeypatch.setattr("iisg_iiif.fetch.requests.Session", _NoNetwork)
 
     out = tmp_path / "iiif.nt"
     assert cli.main(["--links-from", str(nt), "--cache-dir", str(cache), "--out", str(out)]) == 0
     g = Graph().parse(out, format="nt")
     assert (RECORD, SDO.image, CANVAS) in g
+    assert (CANVAS, IISGV.accessLevel, ACCESS_LEVEL.restricted) in g
     assert not out.with_name("iiif.nt.tmp").exists()
 
 
@@ -100,5 +148,21 @@ class _NoNetwork:
     def __init__(self):
         self.headers = {}
 
-    def get(self, *args, **kwargs):
+    def request(self, *args, **kwargs):
         raise AssertionError("unexpected network request")
+
+
+class _FakeResponse:
+    def __init__(self, status_code, location):
+        self.status_code = status_code
+        self.headers = {"location": location} if location else {}
+        self.is_redirect = status_code in (301, 302, 303, 307, 308) and bool(location)
+
+
+class _FakeSession(_NoNetwork):
+    def __init__(self, responses):
+        super().__init__()
+        self.responses = responses
+
+    def request(self, method, url, **kwargs):
+        return _FakeResponse(*self.responses[url])

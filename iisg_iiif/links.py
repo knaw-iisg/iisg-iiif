@@ -8,8 +8,10 @@ findingaid-etl emits, for every component with a ``manifest``-labeled
         <https://schema.org/contentUrl>
         <https://access.iisg.amsterdam/universalviewer/#?manifest=https://hdl.handle.net/10622/COLL00357.2?locatt=view:manifest> .
 
-The record IRI is what this pipeline attaches its triples to; the part
-after ``manifest=`` is the manifest URL to fetch.
+biblio-etl emits the same shape from MARC 856 for digitised catalogue
+items (``<https://iisg.amsterdam/id/item/978601>``). The record IRI is what
+this pipeline attaches its triples to; the part after ``manifest=`` is the
+manifest URL to fetch.
 """
 from __future__ import annotations
 
