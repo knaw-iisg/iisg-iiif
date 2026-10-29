@@ -28,6 +28,10 @@ stop requesting for ``outage_pause`` seconds, then try again with a single
 attempt per request. Once it has been down for ``max_outage`` seconds the
 fetcher goes ``offline`` for the rest of the run, so the run still
 finishes, with whatever was cached or fetched before the outage.
+
+To go easy on the server, ``delay`` spaces out request starts (across all
+workers), and ``deadline`` (a ``time.monotonic()`` value) takes the fetcher
+offline when it passes, so a long backfill can be spread over several runs.
 """
 from __future__ import annotations
 
@@ -52,7 +56,8 @@ _LEVEL_REDIRECT = re.compile(r"/iiif/image/[^/]+__([a-z0-9-]+)/")
 class ManifestFetcher:
     def __init__(self, cache_dir: Path, refresh: bool = False, retries: int = 4, backoff: float = 5,
                  max_backoff: float = 60, session: requests.Session | None = None, offline: bool = False,
-                 outage_after: int = 5, outage_pause: float = 15 * 60, max_outage: float = 30 * 60):
+                 outage_after: int = 5, outage_pause: float = 15 * 60, max_outage: float = 30 * 60,
+                 delay: float = 0, deadline: float | None = None):
         self.cache_dir = cache_dir
         self.refresh = refresh
         self.offline = offline
@@ -63,6 +68,9 @@ class ManifestFetcher:
         self._failures_in_a_row = 0
         self._down_since: float | None = None
         self._resume_at = 0.0
+        self.delay = delay
+        self.deadline = deadline
+        self._next_request_at = 0.0
         self.retries = retries
         self.backoff = backoff
         self.max_backoff = max_backoff
@@ -139,6 +147,7 @@ class ManifestFetcher:
         # While the service is down, a request is just a probe: one attempt.
         retries = 1 if self._down_since is not None else self.retries
         for attempt in range(retries):
+            self._throttle()
             try:
                 r = self.session.request(method, url, timeout=60, **kwargs)
             except requests.exceptions.RequestException as e:
@@ -160,11 +169,28 @@ class ManifestFetcher:
         """Wait out a pause after an outage; False once offline."""
         if self.offline:
             return False
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            with self._lock:
+                if not self.offline:
+                    self.offline = True
+                    print("  time budget used up: the rest of this run uses only what's cached", file=sys.stderr)
+            return False
         with self._lock:
             wait = self._resume_at - time.monotonic()
         if wait > 0:
             time.sleep(wait)
         return not self.offline
+
+    def _throttle(self) -> None:
+        """Start requests at least ``delay`` seconds apart, across all workers."""
+        if not self.delay:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_request_at)
+            self._next_request_at = start + self.delay
+        if start > now:
+            time.sleep(start - now)
 
     def _service_up(self) -> None:
         with self._lock:

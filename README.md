@@ -46,6 +46,8 @@ pipeline's N-Triples output, which it scans for those viewer links. Output goes 
 | `--limit 20` | quick test run on the first 20 manifests |
 | `--workers 4` | concurrent manifest requests (default 4) |
 | `--cache-only` | make no requests: map only the manifests already cached (e.g. while IISG's manifest service is down) |
+| `--delay 0.5` | at least this many seconds between requests, across all workers, to go easy on IISG's server |
+| `--max-minutes 60` | stop requesting after this long and finish from the cache; the rest is fetched next run |
 | `--outage-pause 15` | minutes to stop requesting when IISG's server looks down (5 failed manifests in a row), before trying again |
 | `--max-outage 30` | minutes of outage after which the run stops requesting and finishes from the cache |
 | `--refresh` | re-fetch every manifest and access level instead of reusing the cache |

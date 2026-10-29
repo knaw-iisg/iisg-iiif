@@ -187,6 +187,22 @@ def test_fetcher_pauses_then_resumes_when_the_service_comes_back(tmp_path, monke
     assert not fetcher.offline and fetcher._down_since is None
 
 
+def test_fetcher_spaces_out_requests(tmp_path, monkeypatch):
+    slept = []
+    monkeypatch.setattr("iisg_iiif.fetch.time.sleep", slept.append)
+    fetcher = ManifestFetcher(tmp_path, session=_FakeSession({THUMB: (200, None)}), delay=2)
+    for i in range(3):
+        fetcher.access_level(f"{HANDLE}&n={i}", THUMB)
+    # sleep is mocked, so the clock doesn't move: the third request waits for two slots
+    assert [round(s) for s in slept] == [2, 4]
+
+
+def test_fetcher_goes_offline_past_its_deadline(tmp_path):
+    fetcher = ManifestFetcher(tmp_path, session=_NoNetwork(), deadline=0)
+    assert fetcher.get(HANDLE) == (None, False)
+    assert fetcher.offline
+
+
 class _NoNetwork:
     headers: dict
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
@@ -45,6 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-outage", type=float, default=30, metavar="MINUTES",
                         help="once it has been down this long, stop requesting and finish the run "
                              "from the cache (default: 30)")
+    parser.add_argument("--delay", type=float, default=0, metavar="SECONDS",
+                        help="minimum time between requests, across all workers (default: 0)")
+    parser.add_argument("--max-minutes", type=float, metavar="MINUTES",
+                        help="stop requesting after this long and finish the run from the cache; "
+                             "the rest is fetched on a later run")
     parser.add_argument("--workers", type=int, default=4,
                         help="concurrent manifest requests (default: 4)")
     parser.add_argument("--limit", type=int, help="stop after this many manifests (for a quick test run)")
@@ -64,7 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     links = list(islice(iter_manifest_links(sources), args.limit))
 
     fetcher = ManifestFetcher(args.cache_dir, refresh=args.refresh, offline=args.cache_only,
-                              outage_pause=args.outage_pause * 60, max_outage=args.max_outage * 60)
+                              outage_pause=args.outage_pause * 60, max_outage=args.max_outage * 60,
+                              delay=args.delay,
+                              deadline=time.monotonic() + args.max_minutes * 60 if args.max_minutes else None)
     if args.cache_only:
         cached = [link for link in links if fetcher.cache_path(link.manifest_url).exists()]
         print(f"--cache-only: {len(cached)} of {len(links)} manifests cached, skipping the rest", file=sys.stderr)
